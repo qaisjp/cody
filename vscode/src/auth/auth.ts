@@ -18,6 +18,7 @@ import {
     graphqlClient,
     isDotCom,
     isError,
+    isNeedsAuthChallengeError,
     isNetworkLikeError,
     telemetryRecorder,
 } from '@sourcegraph/cody-shared'
@@ -92,7 +93,9 @@ export async function showSignInMenu(
 
             let authStatus = await authProvider.validateAndStoreCredentials(auth, 'store-if-valid')
 
-            if (!authStatus?.authenticated) {
+            // If authentication failed because the credentials were reported as invalid (and not
+            // due to some other or some ephemeral reason), ask the user for a different token.
+            if (!authStatus?.authenticated && authStatus.error?.type === 'invalid-access-token') {
                 const token = await showAccessTokenInputBox(selectedEndpoint)
                 if (!token) {
                     return
@@ -445,15 +448,19 @@ export async function validateCredentials(
         const userInfo = await client.getCurrentUserInfo(signal)
         signal?.throwIfAborted()
 
-        if (isError(userInfo) && isNetworkLikeError(userInfo)) {
+        if (isError(userInfo) && (isNetworkLikeError(userInfo) || isNeedsAuthChallengeError(userInfo))) {
             logDebug(
                 'auth',
-                `Failed to authenticate to ${config.auth.serverEndpoint} due to likely network error`,
+                `Failed to authenticate to ${config.auth.serverEndpoint} due to likely network or endpoint availability error`,
                 userInfo.message
             )
+            const needsAuthChallenge = isNeedsAuthChallengeError(userInfo)
             return {
                 authenticated: false,
-                error: { type: 'network-error' },
+                error: {
+                    type: 'availability-error',
+                    needsAuthChallenge,
+                },
                 endpoint: config.auth.serverEndpoint,
                 pendingValidation: false,
             }

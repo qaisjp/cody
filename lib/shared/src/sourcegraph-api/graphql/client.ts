@@ -4,6 +4,7 @@ import { fetch } from '../../fetch'
 
 import type { TelemetryEventInput } from '@sourcegraph/telemetry'
 
+import type { IncomingMessage } from 'http'
 import escapeRegExp from 'lodash/escapeRegExp'
 import isEqual from 'lodash/isEqual'
 import omit from 'lodash/omit'
@@ -16,7 +17,7 @@ import { distinctUntilChanged, firstValueFrom } from '../../misc/observable'
 import { addTraceparent, wrapInActiveSpan } from '../../tracing'
 import { isError } from '../../utils'
 import { addCodyClientIdentificationHeaders } from '../client-name-version'
-import { isAbortError } from '../errors'
+import { NeedsAuthChallengeError, isAbortError, isNeedsAuthChallengeError } from '../errors'
 import { addAuthHeaders } from '../utils'
 import { type GraphQLResultCache, ObservableInvalidatedGraphQLResultCacheFactory } from './cache'
 import {
@@ -1612,7 +1613,6 @@ export class SourcegraphGraphQLAPIClient {
             })())
 
         const headers = new Headers(config.configuration?.customHeaders as HeadersInit | undefined)
-        headers.set('Content-Type', 'application/json; charset=utf-8')
         if (config.clientState.anonymousUserID && !process.env.CODY_WEB_DONT_SET_SOME_HEADERS) {
             headers.set('X-Sourcegraph-Actor-Anonymous-UID', config.clientState.anonymousUserID)
         }
@@ -1622,6 +1622,7 @@ export class SourcegraphGraphQLAPIClient {
         addTraceparent(headers)
         addCodyClientIdentificationHeaders(headers)
         addAuthHeaders(config.auth, headers, url)
+        setJSONAcceptContentTypeHeaders(headers)
 
         const { abortController, timeoutSignal } = dependentAbortControllerWithTimeout(signal)
         return wrapInActiveSpan(`httpapi.fetch${queryName ? `.${queryName}` : ''}`, () =>
@@ -1636,6 +1637,11 @@ export class SourcegraphGraphQLAPIClient {
                 .catch(catchHTTPError(url.href, timeoutSignal))
         )
     }
+}
+
+export function setJSONAcceptContentTypeHeaders(headers: Headers): void {
+    headers.set('Accept', 'application/json')
+    headers.set('Content-Type', 'application/json; charset=utf-8')
 }
 
 const DEFAULT_TIMEOUT_MSEC = 20000
@@ -1664,6 +1670,10 @@ function catchHTTPError(
     timeoutSignal: Pick<AbortSignal, 'aborted'>
 ): (error: any) => Error {
     return (error: any) => {
+        if (isNeedsAuthChallengeError(error)) {
+            return error
+        }
+
         // Throw the plain AbortError for intentional aborts so we handle them with call
         // flow, but treat timeout aborts as a network error (below) and include the
         // URL.
@@ -1686,11 +1696,53 @@ export const graphqlClient = SourcegraphGraphQLAPIClient.withGlobalConfig()
 export async function verifyResponseCode(
     response: BrowserOrNodeResponse
 ): Promise<BrowserOrNodeResponse> {
+    if (isCustomAuthChallengeResponse(response)) {
+        throw new NeedsAuthChallengeError()
+    }
+
     if (!response.ok) {
-        const body = await response.text()
+        let body: string | undefined
+        try {
+            body = await response.text()
+        } catch {}
         throw new Error(`HTTP status code ${response.status}${body ? `: ${body}` : ''}`)
     }
     return response
+}
+
+/**
+ * Some customers use an HTTP proxy in front of Sourcegraph that, when the user needs to complete an
+ * auth challenge, returns HTTP 401 with a `X-${CUSTOMER}-U2f-Challenge: true` header. Detect these
+ * kinds of error responses.
+ */
+export function isCustomAuthChallengeResponse(
+    response:
+        | Pick<BrowserOrNodeResponse, 'status' | 'headers'>
+        | Pick<IncomingMessage, 'httpVersion' | 'statusCode' | 'headers'>
+): boolean {
+    ///////////////////////////////////
+    // TODO!(sqs): remove
+    ///////////////////////////////////
+    if (require('node:fs').existsSync('/tmp/is-custom-auth-challenge-error')) {
+        return true
+    }
+
+    function isIncomingMessageType(
+        v: typeof response
+    ): v is Pick<IncomingMessage, 'httpVersion' | 'statusCode' | 'headers'> {
+        return 'httpVersion' in response
+    }
+    const statusCode = isIncomingMessageType(response) ? response.statusCode : response.status
+    if (statusCode === 401) {
+        const headerEntries = isIncomingMessageType(response)
+            ? Object.entries(response.headers)
+            : Array.from(response.headers.entries())
+        return headerEntries.some(
+            ([name, value]) => /^x-.*-u2f-challenge$/i.test(name) && value === 'true'
+        )
+    }
+
+    return false
 }
 
 function hasOutdatedAPIErrorMessages(error: Error): boolean {
