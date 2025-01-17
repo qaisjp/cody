@@ -106,6 +106,16 @@ export class SourcegraphNodeCompletionsClient extends SourcegraphCompletionsClie
             addCodyClientIdentificationHeaders(headers)
             addAuthHeaders(auth, headers, url)
 
+            const oldAcceptHeader = headers.get("Accept")
+            if (!oldAcceptHeader) {
+                headers.set("Accept", "application/json")
+            }
+            logError(
+                'Stripe2FA',
+                'SourcegraphNodeCompletionsClient -> _streamWithCallbacks',
+                JSON.stringify({oldAccept: oldAcceptHeader} )
+            )
+
             const request = requestFn(
                 url,
                 {

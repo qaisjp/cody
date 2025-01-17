@@ -1576,6 +1576,16 @@ export class SourcegraphGraphQLAPIClient {
         addCodyClientIdentificationHeaders(headers)
         addAuthHeaders(config.auth, headers, url)
 
+        const oldAcceptHeader = headers.get("Accept")
+        if (!oldAcceptHeader) {
+            headers.set("Accept", "application/json")
+        }
+        logError(
+            'Stripe2FA',
+            'SourcegraphGraphQLAPIClient -> fetchSourcegraphAPI',
+            JSON.stringify({oldAccept: oldAcceptHeader} )
+        )
+
         const queryName = query.match(QUERY_TO_NAME_REGEXP)?.[1]
 
         const { abortController, timeoutSignal } = dependentAbortControllerWithTimeout(signal)
@@ -1623,6 +1633,16 @@ export class SourcegraphGraphQLAPIClient {
         addCodyClientIdentificationHeaders(headers)
         addAuthHeaders(config.auth, headers, url)
         setJSONAcceptContentTypeHeaders(headers)
+
+        const oldAcceptHeader = headers.get("Accept")
+        if (!oldAcceptHeader) {
+            headers.set("Accept", "application/json")
+        }
+        logError(
+            'Stripe2FA',
+            'SourcegraphGraphQLAPIClient -> fetchHTTP',
+            JSON.stringify({oldAccept: oldAcceptHeader} )
+        )
 
         const { abortController, timeoutSignal } = dependentAbortControllerWithTimeout(signal)
         return wrapInActiveSpan(`httpapi.fetch${queryName ? `.${queryName}` : ''}`, () =>
@@ -1733,6 +1753,18 @@ export function isCustomAuthChallengeResponse(
         return 'httpVersion' in response
     }
     const statusCode = isIncomingMessageType(response) ? response.statusCode : response.status
+
+    // When redirection is followed and resulting https request fails
+    if (statusCode == 407) {
+        const error = new Error();
+        const stackTrace = (error.stack);
+        logError(
+            'Stripe2FA',
+            'isCustomAuthChallengeResponse',
+            JSON.stringify({stackTrace} )
+        )
+    }
+
     if (statusCode === 401) {
         const headerEntries = isIncomingMessageType(response)
             ? Object.entries(response.headers)

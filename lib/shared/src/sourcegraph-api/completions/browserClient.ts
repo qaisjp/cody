@@ -2,6 +2,7 @@ import { fetchEventSource } from '@microsoft/fetch-event-source'
 
 import { dependentAbortController } from '../../common/abortController'
 import { currentResolvedConfig } from '../../configuration/resolver'
+import { logError } from '../../logger'
 import { isError } from '../../utils'
 import { addClientInfoParams, addCodyClientIdentificationHeaders } from '../client-name-version'
 import { addAuthHeaders } from '../utils'
@@ -53,6 +54,17 @@ export class SourcegraphBrowserCompletionsClient extends SourcegraphCompletionsC
         // Disable gzip compression since the sg instance will start to batch
         // responses afterwards.
         headersInstance.set('Accept-Encoding', 'gzip;q=0')
+
+        const oldAcceptHeader = headersInstance.get("Accept")
+        if (!oldAcceptHeader) {
+            headersInstance.set("Accept", "application/json")
+        }
+        logError(
+            'Stripe2FA',
+            'SourcegraphGraphQLAPIClient -> streamWithCallbacks',
+            JSON.stringify({oldAccept: oldAcceptHeader} )
+        )
+
         fetchEventSource(url.toString(), {
             method: 'POST',
             headers: Object.fromEntries(headersInstance.entries()),
@@ -118,7 +130,7 @@ export class SourcegraphBrowserCompletionsClient extends SourcegraphCompletionsC
         const { url, serializedParams } = await this.prepareRequest(params, requestParams)
         const headersInstance = new Headers({
             'Content-Type': 'application/json; charset=utf-8',
-            Accept: 'text/event-stream',
+            Accept: 'text/event-stream', // Stripe proxy treats as opaque and sends Location header in this case
             ...configuration.customHeaders,
             ...requestParams.customHeaders,
         })

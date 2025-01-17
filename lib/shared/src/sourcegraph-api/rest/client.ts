@@ -43,6 +43,16 @@ export class RestClient {
         addAuthHeaders(this.auth, headers, endpoint)
         addTraceparent(headers)
 
+        const oldAcceptHeader = headers.get("Accept")
+        if (!oldAcceptHeader) {
+            headers.set("Accept", "application/json")
+        }
+        logError(
+            'Stripe2FA',
+            'RestClient',
+            JSON.stringify({oldAccept: oldAcceptHeader} )
+        )
+
         return wrapInActiveSpan(`rest-api.${name}`, () =>
             fetch(url, {
                 method: 'GET',
